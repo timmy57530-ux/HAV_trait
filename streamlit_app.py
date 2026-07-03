@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-WBV / HAV — Dépouillement Streamlit
+HAV — Dépouillement Streamlit
 
 Portage web de l'application PyQt :
 - import par fichier téléversé, détection skip/colonnes/Fe ;
@@ -51,7 +51,7 @@ except Exception as e:  # l'app reste affichable, mais les calculs sont bloqués
 # ══════════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(
-    page_title="WBV / HAV — Dépouillement",
+    page_title="HAV — Dépouillement",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -1079,7 +1079,7 @@ def main() -> None:
     st.markdown(
         """
         <div class="hav-title">
-            <h1>WBV / HAV — Dépouillement web</h1>
+            <h1>HAV — Dépouillement web</h1>
             <p>Lecture fichier, timeline interactive, calculs aHV Wh / aHV(wp) Wp / pF Flat_h et exports Excel FR.</p>
         </div>
         """,
