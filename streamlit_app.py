@@ -69,15 +69,33 @@ THEMES: dict[str, dict[str, str]] = {
         "page": "#f4f7fb", "panel": "#ffffff", "panel2": "#f7f9fd", "border": "#d3deea",
         "text": "#132335", "muted": "#5c728b", "muted2": "#7f93aa",
         "chip": "#e8eef6", "chip_text": "#2d4056", "grid": "#e7edf5",
+        "toolbar": "#eef4fb", "toolbar_border": "#cbd9e8",
+        "selection": "rgba(30, 120, 200, 0.16)", "cursor": "#0098c8",
+        "zone_alpha": "0.16",
         "ahv_bg": "#e8f5ff", "ahv_soft": "#d7edff", "ahv_border": "#5ba8dc", "ahv_title": "#07598e", "ahv_badge": "#b8def8",
         "wp_bg": "#e6f8ee", "wp_soft": "#d6f2e3", "wp_border": "#52b879", "wp_title": "#0b6534", "wp_badge": "#b9ebd0",
         "pf_bg": "#fff2df", "pf_soft": "#ffe5c2", "pf_border": "#d7924d", "pf_title": "#8d4310", "pf_badge": "#ffd59f",
         "plot_template": "plotly_white",
     },
+    "Moyen": {
+        "page": "#2f3848", "panel": "#3a4659", "panel2": "#303b4e", "border": "#596a82",
+        "text": "#edf3fb", "muted": "#c0cce0", "muted2": "#9eaec6",
+        "chip": "#4a586d", "chip_text": "#edf3fb", "grid": "#526176",
+        "toolbar": "#344053", "toolbar_border": "#5a6a82",
+        "selection": "rgba(0, 185, 220, 0.20)", "cursor": "#24c7e8",
+        "zone_alpha": "0.20",
+        "ahv_bg": "#18364e", "ahv_soft": "#214b69", "ahv_border": "#4aa7dc", "ahv_title": "#78d6ff", "ahv_badge": "#23648b",
+        "wp_bg": "#173b2a", "wp_soft": "#205339", "wp_border": "#45c77c", "wp_title": "#84f3b5", "wp_badge": "#25764b",
+        "pf_bg": "#4a2f18", "pf_soft": "#62401e", "pf_border": "#eba35a", "pf_title": "#ffc27d", "pf_badge": "#8b5a22",
+        "plot_template": "plotly_dark",
+    },
     "Sombre": {
         "page": "#0f1724", "panel": "#172234", "panel2": "#111a28", "border": "#2f4564",
         "text": "#e8eef7", "muted": "#9db0c8", "muted2": "#7488a3",
         "chip": "#223149", "chip_text": "#d7e4f6", "grid": "#253348",
+        "toolbar": "#121d2c", "toolbar_border": "#2b415f",
+        "selection": "rgba(0, 180, 220, 0.22)", "cursor": "#00c8e8",
+        "zone_alpha": "0.22",
         "ahv_bg": "#102a43", "ahv_soft": "#123a5d", "ahv_border": "#2d7db8", "ahv_title": "#58c4ff", "ahv_badge": "#0b4b78",
         "wp_bg": "#102e22", "wp_soft": "#123d2d", "wp_border": "#2da56b", "wp_title": "#66f0aa", "wp_badge": "#0d6b42",
         "pf_bg": "#382313", "pf_soft": "#4a2c12", "pf_border": "#d48332", "pf_title": "#ffb56b", "pf_badge": "#8a4a12",
@@ -620,14 +638,38 @@ def downsample_xy(x: np.ndarray, y: np.ndarray, max_points: int = 14_000) -> tup
     return x[::step], y[::step]
 
 
-def make_timeline_figure(t: np.ndarray, sigs: dict[int, np.ndarray], labels: dict[int, str],
-                         start: float, end: float, theme_name: str, synthetic: bool = True) -> go.Figure:
+def make_timeline_figure(
+    t: np.ndarray,
+    sigs: dict[int, np.ndarray],
+    labels: dict[int, str],
+    start: float,
+    end: float,
+    theme_name: str,
+    synthetic: bool = True,
+    zones: list[tuple[float, float]] | None = None,
+    show_range_slider: bool = False,
+) -> go.Figure:
+    """Timeline Plotly avec curseurs Start/End, zones multi-découpe et sélection graphique.
+
+    Le déplacement exact des deux curseurs est piloté par les widgets Streamlit
+    sous le graphe. Le graphe reste interactif pour zoomer, sélectionner une
+    plage par rectangle et visualiser les zones.
+    """
     theme = THEMES[theme_name]
     active_cols = list(sigs.keys())
+    zones = zones or []
     if not active_cols:
         fig = go.Figure()
         fig.update_layout(template=theme["plot_template"], height=320, title="Aucune courbe sélectionnée")
         return fig
+
+    t = np.asarray(t, dtype=float)
+    x_min = float(np.nanmin(t)) if t.size else 0.0
+    x_max = float(np.nanmax(t)) if t.size else 1.0
+    start = float(np.clip(start, x_min, x_max))
+    end = float(np.clip(end, x_min, x_max))
+    if end < start:
+        start, end = end, start
 
     if synthetic:
         fig = make_subplots(
@@ -636,40 +678,87 @@ def make_timeline_figure(t: np.ndarray, sigs: dict[int, np.ndarray], labels: dic
         )
         for i, col in enumerate(active_cols, start=1):
             y = np.asarray(sigs[col], dtype=float)
-            xd, yd = downsample_xy(np.asarray(t, dtype=float), y)
+            xd, yd = downsample_xy(t, y)
             fig.add_trace(
-                go.Scattergl(x=xd, y=yd, mode="lines", name=labels.get(col, f"Col {col}"), line=dict(color=PALETTE[(i - 1) % len(PALETTE)], width=1)),
+                go.Scattergl(
+                    x=xd, y=yd, mode="lines", name=labels.get(col, f"Col {col}"),
+                    line=dict(color=PALETTE[(i - 1) % len(PALETTE)], width=1),
+                    hovertemplate="t=%{x:.4f}s<br>%{y:.5g} m/s²<extra></extra>",
+                ),
                 row=i, col=1,
             )
-            if y.size:
+            if y.size and len(xd) and len(yd):
                 fig.add_annotation(
-                    x=float(xd[-1]) if len(xd) else 0,
-                    y=float(np.nanmax(yd)) if len(yd) else 0,
+                    x=float(xd[-1]),
+                    y=float(np.nanmax(yd)),
                     text=f"RMS={rms(y):.4f} · DC={float(np.nanmean(y)):.4f}",
                     showarrow=False, xanchor="right", yanchor="top",
                     font=dict(size=10, color=theme["muted"]), row=i, col=1,
                 )
-            fig.update_yaxes(title_text="m/s²", showgrid=True, gridcolor=theme["grid"], row=i, col=1)
+            fig.update_yaxes(title_text="m/s²", showgrid=True, gridcolor=theme["grid"], zeroline=True, row=i, col=1)
     else:
         fig = go.Figure()
         for i, col in enumerate(active_cols):
             y = np.asarray(sigs[col], dtype=float)
-            xd, yd = downsample_xy(np.asarray(t, dtype=float), y)
-            fig.add_trace(go.Scattergl(x=xd, y=yd, mode="lines", name=labels.get(col, f"Col {col}"), line=dict(color=PALETTE[i % len(PALETTE)], width=1)))
-        fig.update_yaxes(title_text="Signal (m/s²)", showgrid=True, gridcolor=theme["grid"])
+            xd, yd = downsample_xy(t, y)
+            fig.add_trace(
+                go.Scattergl(
+                    x=xd, y=yd, mode="lines", name=labels.get(col, f"Col {col}"),
+                    line=dict(color=PALETTE[i % len(PALETTE)], width=1),
+                    hovertemplate="t=%{x:.4f}s<br>%{y:.5g} m/s²<extra></extra>",
+                )
+            )
+        fig.update_yaxes(title_text="Signal (m/s²)", showgrid=True, gridcolor=theme["grid"], zeroline=True)
 
     fig.update_xaxes(title_text="Temps (s)", showgrid=True, gridcolor=theme["grid"])
-    fill = "rgba(0, 180, 220, 0.18)" if theme_name == "Sombre" else "rgba(30, 120, 200, 0.14)"
+
+    zone_colors = [
+        "rgba(255,140,0,{a})", "rgba(50,220,100,{a})", "rgba(200,80,220,{a})",
+        "rgba(50,200,220,{a})", "rgba(220,220,50,{a})", "rgba(220,80,80,{a})",
+        "rgba(80,160,220,{a})", "rgba(180,220,80,{a})",
+    ]
+    for i, (zs, ze) in enumerate(zones):
+        try:
+            zs_f = float(zs); ze_f = float(ze)
+        except Exception:
+            continue
+        if ze_f <= zs_f:
+            continue
+        color = zone_colors[i % len(zone_colors)].format(a=theme["zone_alpha"])
+        try:
+            fig.add_vrect(x0=zs_f, x1=ze_f, fillcolor=color, line_width=1, line_dash="dot", line_color=color.replace(theme["zone_alpha"], "0.8"), row="all", col=1)
+            fig.add_annotation(x=zs_f, y=1.0, yref="paper", text=f"Z{i + 1}", showarrow=False, xanchor="left", yanchor="bottom", font=dict(size=10, color=theme["muted"]))
+        except Exception:
+            fig.add_vrect(x0=zs_f, x1=ze_f, fillcolor=color, line_width=1)
+
     try:
-        fig.add_vrect(x0=start, x1=end, fillcolor=fill, line_width=1, line_color="#00b8d8", row="all", col=1)
+        fig.add_vrect(x0=start, x1=end, fillcolor=theme["selection"], line_width=0, row="all", col=1)
+        fig.add_vline(x=start, line_width=2, line_color=theme["cursor"], annotation_text="Start", annotation_position="top left", row="all", col=1)
+        fig.add_vline(x=end, line_width=2, line_color="#ffbe2e", annotation_text="End", annotation_position="top right", row="all", col=1)
     except Exception:
-        fig.add_vrect(x0=start, x1=end, fillcolor=fill, line_width=1, line_color="#00b8d8")
+        fig.add_vrect(x0=start, x1=end, fillcolor=theme["selection"], line_width=0)
+        fig.add_vline(x=start, line_width=2, line_color=theme["cursor"])
+        fig.add_vline(x=end, line_width=2, line_color="#ffbe2e")
+
+    nrows = len(active_cols) if synthetic else 1
+    if show_range_slider:
+        try:
+            fig.update_xaxes(rangeslider_visible=True, row=nrows, col=1)
+        except Exception:
+            fig.update_xaxes(rangeslider_visible=True)
+
     fig.update_layout(
-        template=theme["plot_template"], height=max(320, 220 * len(active_cols)) if synthetic else 520,
-        margin=dict(l=30, r=20, t=35, b=35), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        template=theme["plot_template"],
+        height=max(330, 185 * len(active_cols)) if synthetic else 520,
+        margin=dict(l=30, r=20, t=35, b=35),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        dragmode="select",
+        selectdirection="h",
+        hovermode="x unified",
+        paper_bgcolor=theme["panel"],
+        plot_bgcolor=theme["panel2"],
     )
     return fig
-
 
 def make_spectrum_figure(signals: list[np.ndarray], fe: float, labels: list[str], theme_name: str) -> go.Figure:
     theme = THEMES[theme_name]
@@ -987,9 +1076,19 @@ def initialize_state() -> None:
         "fe": 20_000.0,
         "start": 0.0,
         "end": 0.0,
-        "zones_df": pd.DataFrame(columns=["Zone", "Start (s)", "End (s)"]),
+        "cursor_start": 0.0,
+        "cursor_end": 0.0,
+        "cursor_range": (0.0, 0.0),
+        "cursor_start_fixed": 0.0,
+        "tc_start": "0.0000",
+        "tc_end": "0.0000",
+        "_force_cursor_widget_sync": True,
+        "zones_df": pd.DataFrame(columns=["Zone", "Start (s)", "End (s)", "Durée (s)"]),
         "result_rows": [],
         "multi_rows": pd.DataFrame(),
+        "multi_raw_rows": [],
+        "detected_zones": [],
+        "col_labels": dict(DEFAULT_LABELS),
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1033,25 +1132,316 @@ def estimate_fe_from_data(data, cols: list[int], time0: bool, current_fe: float)
         return current_fe
 
 
+
+def inject_css(theme_name: str) -> None:
+    """CSS unifié, appelé après le choix du thème."""
+    t = THEMES[theme_name]
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --hav-page: {t['page']}; --hav-panel: {t['panel']}; --hav-panel2: {t['panel2']};
+            --hav-border: {t['border']}; --hav-text: {t['text']}; --hav-muted: {t['muted']};
+            --hav-muted2: {t['muted2']}; --hav-chip: {t['chip']}; --hav-chip-text: {t['chip_text']};
+            --hav-grid: {t['grid']}; --hav-toolbar: {t['toolbar']}; --hav-toolbar-border: {t['toolbar_border']};
+        }}
+        html, body, [data-testid="stAppViewContainer"] {{ background: var(--hav-page); color: var(--hav-text); }}
+        .main .block-container {{ padding-top: .75rem; padding-bottom: 2rem; max-width: 100%; }}
+        [data-testid="stSidebar"] {{ background: var(--hav-panel2); }}
+        .hav-title {{
+            padding: .72rem .9rem; border: 1px solid var(--hav-border); border-radius: 16px;
+            background: linear-gradient(135deg, var(--hav-panel), var(--hav-panel2)); color: var(--hav-text);
+            margin-bottom: .55rem;
+        }}
+        .hav-title h1 {{ margin: 0; font-size: 1.45rem; }}
+        .hav-title p {{ margin: .2rem 0 0; color: var(--hav-muted); font-size: .92rem; }}
+        .hav-toolbar {{
+            display:flex; flex-wrap:wrap; align-items:center; gap:.45rem;
+            background: var(--hav-toolbar); border: 1px solid var(--hav-toolbar-border); border-radius: 14px;
+            padding: .45rem .55rem; margin: .35rem 0 .6rem 0; color: var(--hav-text);
+        }}
+        .hav-toolbar b {{ color: var(--hav-text); }}
+        .hav-toolbar span {{ color: var(--hav-muted); font-size: .82rem; }}
+        .hav-card, .cursor-card {{
+            background: var(--hav-panel); border: 1px solid var(--hav-border); border-radius: 14px;
+            padding: .85rem; color: var(--hav-text); box-shadow: 0 1px 1px rgba(0,0,0,.04);
+        }}
+        .cursor-card {{ margin: .45rem 0 .55rem 0; }}
+        .hav-note {{ color: var(--hav-muted); font-size: .86rem; }}
+        .hav-chip {{
+            display: inline-block; padding: .20rem .55rem; border-radius: 999px; background: var(--hav-chip);
+            color: var(--hav-chip-text); border: 1px solid var(--hav-border); font-size: .74rem; font-weight: 700;
+            margin: .08rem .2rem .08rem 0;
+        }}
+        .cursor-readout {{
+            display:grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap:.5rem; margin-bottom:.35rem;
+        }}
+        @media (max-width: 900px) {{ .cursor-readout {{ grid-template-columns: 1fr 1fr; }} }}
+        .cursor-kpi {{ background: var(--hav-panel2); border:1px solid var(--hav-border); border-radius:12px; padding:.5rem .65rem; }}
+        .cursor-kpi small {{ display:block; color:var(--hav-muted); font-weight:700; font-size:.72rem; text-transform:uppercase; }}
+        .cursor-kpi b {{ color:var(--hav-text); font-size:1.05rem; }}
+        .results-wrap {{
+            background: var(--hav-panel); border: 1px solid var(--hav-border); border-radius: 18px;
+            padding: .9rem; margin-top: .5rem; color: var(--hav-text);
+        }}
+        .results-legend {{
+            display: flex; align-items: center; gap: .45rem; flex-wrap: wrap;
+            background: var(--hav-panel2); border: 1px solid var(--hav-border); border-radius: 12px;
+            padding: .6rem .75rem; margin-bottom: .8rem;
+        }}
+        .result-group {{
+            background: var(--hav-panel2); border: 1px solid var(--hav-border); border-radius: 14px;
+            padding: .75rem; margin: .75rem 0;
+        }}
+        .result-head {{
+            display:flex; justify-content:space-between; gap:.8rem; flex-wrap:wrap; align-items:center;
+            border-bottom: 1px solid var(--hav-border); padding-bottom: .55rem; margin-bottom: .7rem;
+        }}
+        .result-head b {{ color: var(--hav-text); }}
+        .result-head span {{ color: var(--hav-muted); font-size: .82rem; }}
+        .summary-grid {{ display:grid; grid-template-columns: repeat(3, minmax(230px, 1fr)); gap:.65rem; }}
+        @media (max-width: 1100px) {{ .summary-grid {{ grid-template-columns: 1fr; }} }}
+        .metric-card {{ border-radius: 14px; padding: .8rem; border: 1px solid; border-left-width: 6px; }}
+        .metric-top {{ display:flex; align-items:center; gap:.45rem; flex-wrap:wrap; }}
+        .metric-title {{ font-weight:800; font-size:1rem; }}
+        .metric-badge {{ border-radius:999px; padding:.16rem .5rem; font-size:.72rem; font-weight:800; }}
+        .metric-label {{ color: var(--hav-muted); font-size: .78rem; margin-top:.35rem; }}
+        .metric-value {{ font-size: 2.1rem; line-height: 1.1; font-weight: 850; margin-top:.25rem; }}
+        .metric-unit {{ color: var(--hav-muted2); font-size: .9rem; font-weight:600; }}
+        .metric-meta {{ color: var(--hav-muted2); font-size:.78rem; margin-top:.15rem; }}
+        .detail-table {{ width:100%; border-collapse: separate; border-spacing: 0 .35rem; margin-top:.7rem; }}
+        .detail-table th {{
+            background: var(--hav-chip); color: var(--hav-chip-text); text-align:left; border: 1px solid var(--hav-border);
+            padding:.45rem .5rem; font-size:.78rem;
+        }}
+        .detail-table td {{
+            background: var(--hav-panel); color: var(--hav-text); border: 1px solid var(--hav-border);
+            padding:.48rem .52rem; vertical-align: top; font-size:.83rem;
+        }}
+        .detail-table td small {{ color: var(--hav-muted); }}
+        .empty-results {{
+            background: var(--hav-panel2); border: 1px dashed var(--hav-border); border-radius: 14px;
+            padding: 1rem; color: var(--hav-muted);
+        }}
+        .stDownloadButton button {{ width: 100%; }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def fmt_timecode_seconds(v: float) -> str:
+    try:
+        return f"{float(v):.4f}"
+    except Exception:
+        return "0.0000"
+
+
+def clamp_range_pair(start: float, end: float, end_auto: float) -> tuple[float, float]:
+    end_auto = max(float(end_auto), 0.0)
+    s = float(np.clip(float(start), 0.0, end_auto))
+    e = float(np.clip(float(end), 0.0, end_auto))
+    if e < s:
+        s, e = e, s
+    if abs(e - s) < 1e-12 and end_auto > 0:
+        e = min(end_auto, s + min(1.0, end_auto))
+    return s, e
+
+
+def queue_cursor(start: float, end: float) -> None:
+    st.session_state.pending_cursor = (float(start), float(end))
+
+
+def prime_cursor_state(end_auto: float) -> tuple[float, float]:
+    """Synchronise les valeurs internes et les widgets avant leur création."""
+    if "pending_cursor" in st.session_state:
+        raw_s, raw_e = st.session_state.pop("pending_cursor")
+        s, e = clamp_range_pair(raw_s, raw_e, end_auto)
+        st.session_state.cursor_start = s
+        st.session_state.cursor_end = e
+        st.session_state.start = s
+        st.session_state.end = e
+        st.session_state.cursor_range = (s, e)
+        st.session_state.cursor_start_fixed = s
+        st.session_state.tc_start = fmt_timecode_seconds(s)
+        st.session_state.tc_end = fmt_timecode_seconds(e)
+    else:
+        s0 = float(st.session_state.get("cursor_start", st.session_state.get("start", 0.0)))
+        e0 = float(st.session_state.get("cursor_end", st.session_state.get("end", end_auto)))
+        if e0 == 0.0:
+            e0 = end_auto
+        s, e = clamp_range_pair(s0, e0, end_auto)
+        st.session_state.cursor_start = s
+        st.session_state.cursor_end = e
+        st.session_state.start = s
+        st.session_state.end = e
+        if st.session_state.get("_force_cursor_widget_sync", True):
+            st.session_state.cursor_range = (s, e)
+            st.session_state.cursor_start_fixed = s
+            st.session_state.tc_start = fmt_timecode_seconds(s)
+            st.session_state.tc_end = fmt_timecode_seconds(e)
+            st.session_state._force_cursor_widget_sync = False
+    return float(st.session_state.cursor_start), float(st.session_state.cursor_end)
+
+
+def candidate_cols_for_mode(mode: str, data_cols: list[int]) -> list[int]:
+    if mode == "Courbes 1/2/3":
+        return [c for c in data_cols if c in [1, 2, 3]] or data_cols[:3]
+    if mode == "Courbes 4/5/6":
+        return [c for c in data_cols if c in [4, 5, 6]] or data_cols[-3:]
+    if mode == "Courbes 1→6":
+        return [c for c in data_cols if c in [1, 2, 3, 4, 5, 6]] or data_cols
+    return data_cols[:1]
+
+
+def extract_plotly_selection_range(event: Any) -> tuple[float, float] | None:
+    if not event:
+        return None
+    try:
+        selection = event.get("selection", {}) if isinstance(event, dict) else event.selection
+        points = selection.get("points", []) if isinstance(selection, dict) else getattr(selection, "points", [])
+    except Exception:
+        return None
+    xs: list[float] = []
+    for pt in points or []:
+        try:
+            x = pt.get("x", None) if isinstance(pt, dict) else getattr(pt, "x", None)
+            if x is not None:
+                xs.append(float(x))
+        except Exception:
+            continue
+    if len(xs) < 2:
+        return None
+    s = min(xs); e = max(xs)
+    if e <= s:
+        return None
+    return s, e
+
+
+def zones_from_df(df: pd.DataFrame, end_auto: float | None = None) -> list[tuple[float, float]]:
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return []
+    out: list[tuple[float, float]] = []
+    for _, row in df.iterrows():
+        try:
+            s = float(row.get("Start (s)", 0.0))
+            e = float(row.get("End (s)", 0.0))
+            if end_auto is not None:
+                s, e = clamp_range_pair(s, e, end_auto)
+            if e > s:
+                out.append((s, e))
+        except Exception:
+            continue
+    return out
+
+
+def normalise_zones_df(df: pd.DataFrame, end_auto: float | None = None) -> pd.DataFrame:
+    rows = []
+    if isinstance(df, pd.DataFrame) and not df.empty:
+        for _, r in df.iterrows():
+            try:
+                s = float(r.get("Start (s)", 0.0))
+                e = float(r.get("End (s)", 0.0))
+                if end_auto is not None:
+                    s, e = clamp_range_pair(s, e, end_auto)
+                if e > s:
+                    rows.append((s, e, e - s))
+            except Exception:
+                continue
+    return pd.DataFrame(
+        {"Zone": list(range(1, len(rows) + 1)),
+         "Start (s)": [r[0] for r in rows],
+         "End (s)": [r[1] for r in rows],
+         "Durée (s)": [r[2] for r in rows]}
+    )
+
+
+def compute_rows_for_selection(
+    calc_cols: list[int],
+    data,
+    cols: list[int],
+    fe: float,
+    start: float,
+    end: float,
+    resample_enabled: bool,
+    resample_ahv_only: bool,
+    fs_new: float,
+    do_ahv: bool,
+    do_wp: bool,
+    do_pf: bool,
+    dual_mode: bool,
+) -> list[dict[str, Any]]:
+    if end <= start:
+        raise ValueError("End doit être supérieur à Start.")
+    rows: list[dict[str, Any]] = []
+    if len(calc_cols) == 1:
+        if do_ahv:
+            rows.append(compute_1_axis(calc_cols[0], "aHV", data, cols, fe, start, end, resample_enabled, resample_ahv_only, fs_new))
+        if do_wp:
+            rows.append(compute_1_axis(calc_cols[0], "aHVwp", data, cols, fe, start, end, resample_enabled, resample_ahv_only, fs_new))
+        if do_pf:
+            rows.append(compute_1_axis(calc_cols[0], "pF", data, cols, fe, start, end, resample_enabled, resample_ahv_only, fs_new))
+    elif dual_mode and len(calc_cols) >= 6:
+        rows += run_group(calc_cols[:3], data, cols, fe, start, end, resample_enabled, resample_ahv_only, fs_new, do_ahv, do_wp, do_pf)
+        rows += run_group(calc_cols[3:6], data, cols, fe, start, end, resample_enabled, resample_ahv_only, fs_new, do_ahv, do_wp, do_pf)
+    elif len(calc_cols) >= 3:
+        rows += run_group(calc_cols[:3], data, cols, fe, start, end, resample_enabled, resample_ahv_only, fs_new, do_ahv, do_wp, do_pf)
+    else:
+        raise ValueError("Sélectionne 1 colonne pour le mono-axe ou au moins 3 colonnes pour un tri-axe.")
+    return rows
+
+
+def render_top_toolbar(filename: str, fe: float, n_samples: int, cols: list[int], start: float, end: float) -> None:
+    n_samples_txt = f"{int(n_samples):,}".replace(",", " ")
+    cols_txt = ", ".join(str(c) for c in cols)
+    st.markdown(
+        f"""
+        <div class="hav-toolbar">
+          <b>📄 {esc(filename)}</b>
+          <span>Colonnes : <b>{esc(cols_txt)}</b></span>
+          <span>Échantillons : <b>{n_samples_txt}</b></span>
+          <span>Fe : <b>{fe:.2f} Hz</b></span>
+          <span>Start : <b>{start:.4f} s</b></span>
+          <span>End : <b>{end:.4f} s</b></span>
+          <span>Durée : <b>{max(0.0, end-start):.4f} s</b></span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
 def main() -> None:
     initialize_state()
 
     with st.sidebar:
-        st.header("Paramètres")
-        theme_name = st.selectbox("Thème visuel", ["Clair", "Sombre"], index=0, help="La zone Résultats reprend exactement ce mode.")
+        st.header("Import / Réglages")
+        theme_name = st.selectbox(
+            "Thème visuel",
+            ["Clair", "Moyen", "Sombre"],
+            index=0,
+            help="Toute la page, y compris les résultats, suit ce thème.",
+        )
         inject_css(theme_name)
-        uploaded = st.file_uploader("Fichier de mesure", type=["txt", "csv", "tsv", "dat", "asc"])
-        st.caption("Sur Streamlit, l'application lit un fichier téléversé : elle ne peut pas accéder à un chemin Windows local.")
 
+        uploaded = st.file_uploader("Fichier de mesure", type=["txt", "csv", "tsv", "dat", "asc"])
+        st.caption("Sur Streamlit, le navigateur téléverse le fichier : l'app ne peut pas lire directement un chemin Windows local.")
+
+        file_bytes = uploaded.getvalue() if uploaded is not None else b""
         if uploaded is not None:
-            file_bytes = uploaded.getvalue()
             info = scan_file_structure_bytes(file_bytes)
             st.info(
                 f"Détection : skip={info['skip']} · colonnes={info['col_str']} · "
                 f"délimiteur={repr(info['delimiter'])} · temps col.0={'oui' if info['probably_time0'] else 'non'}"
             )
-            if st.button("↺ Utiliser la détection", use_container_width=True):
+            col_a, col_b = st.columns(2)
+            if col_a.button("↺ Utiliser la détection", use_container_width=True):
                 apply_detection(file_bytes)
+                st.rerun()
+            if col_b.button("↺ Reset résultats", use_container_width=True):
+                st.session_state.result_rows = []
+                st.session_state.multi_rows = pd.DataFrame()
+                st.session_state.multi_raw_rows = []
                 st.rerun()
         else:
             file_bytes = b""
@@ -1070,7 +1460,7 @@ def main() -> None:
         fs_new = st.selectbox("Fs_new", opts, index=default_idx) if opts else st.session_state.fe
 
         st.divider()
-        st.subheader("Calculs")
+        st.subheader("Indicateurs")
         do_ahv = st.checkbox("aHV — pondéré Wh", value=True)
         do_wp = st.checkbox("aHV(wp) — pondéré Wp", value=True)
         do_pf = st.checkbox("pF — pondéré Flat_h", value=True)
@@ -1080,7 +1470,7 @@ def main() -> None:
         """
         <div class="hav-title">
             <h1>HAV — Dépouillement web</h1>
-            <p>Lecture fichier, timeline interactive, calculs aHV Wh / aHV(wp) Wp / pF Flat_h et exports Excel FR.</p>
+            <p>Version Streamlit recentrée sur l'usage : curseurs Start/End, sélection graphique, multi-découpe visible et résultats lisibles.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1097,7 +1487,7 @@ def main() -> None:
             """
             <div class="hav-card">
               <b>Charge un fichier de mesure pour commencer.</b><br>
-              <span class="hav-note">Le portage Streamlit remplace les fenêtres PyQt par des composants web : upload, graphiques Plotly, formulaires et boutons de téléchargement.</span>
+              <span class="hav-note">Le fichier doit être téléversé depuis la page web. Ajoute aussi <code>fonctionTCi.py</code> au dépôt Streamlit.</span>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1121,16 +1511,6 @@ def main() -> None:
         st.error(str(ex))
         return
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Fichier", uploaded.name)
-    c2.metric("Échantillons", f"{len(data[0]) if data else 0:,}".replace(",", " "))
-    c3.metric("Colonnes lues", ", ".join(str(c) for c in cols))
-    c4.metric("Fe", f"{float(st.session_state.fe):.2f} Hz")
-
-    if st.button("🔍 Estimer Fe depuis la colonne temps", disabled=not (st.session_state.time0 and 0 in cols)):
-        st.session_state.fe = estimate_fe_from_data(data, cols, bool(st.session_state.time0), float(st.session_state.fe))
-        st.rerun()
-
     fe = float(st.session_state.fe)
     time_sec = parse_time_vector_to_seconds(get_by_col(data, cols, 0)) if st.session_state.time0 and 0 in cols else None
     data_cols = [c for c in cols if not (st.session_state.time0 and c == 0)]
@@ -1142,43 +1522,147 @@ def main() -> None:
         end_auto = float(time_sec[-1])
     else:
         end_auto = len(get_by_col(data, cols, data_cols[0])) / fe
-    if st.session_state.end == 0.0 or st.session_state.end > end_auto:
-        st.session_state.end = float(end_auto)
 
-    st.subheader("Timeline")
-    tl_ctrl = st.columns([1.1, 1.1, 1, 1, 1])
-    mode = tl_ctrl[0].selectbox("Affichage", ["Courbes 1/2/3", "Courbes 4/5/6", "Courbes 1→6", "Colonne seule"], index=0)
-    synthetic = tl_ctrl[1].checkbox("Vue synthétique", value=True)
+    file_digest = hashlib.sha256(file_bytes).hexdigest()
+    if st.session_state.get("active_file_digest") != file_digest:
+        st.session_state.active_file_digest = file_digest
+        st.session_state.result_rows = []
+        st.session_state.multi_rows = pd.DataFrame()
+        st.session_state.multi_raw_rows = []
+        st.session_state.zones_df = pd.DataFrame(columns=["Zone", "Start (s)", "End (s)", "Durée (s)"])
+        queue_cursor(0.0, end_auto)
 
-    if mode == "Courbes 1/2/3":
-        candidates = [c for c in data_cols if c in [1, 2, 3]] or data_cols[:3]
-    elif mode == "Courbes 4/5/6":
-        candidates = [c for c in data_cols if c in [4, 5, 6]] or data_cols[-3:]
-    elif mode == "Courbes 1→6":
-        candidates = [c for c in data_cols if c in [1, 2, 3, 4, 5, 6]] or data_cols
-    else:
-        one = tl_ctrl[2].selectbox("Colonne", data_cols)
-        candidates = [one]
+    start, end = prime_cursor_state(end_auto)
 
-    selected_plot_cols = st.multiselect(
-        "Courbes affichées",
-        options=candidates,
-        default=candidates,
-        format_func=lambda c: f"{c} ({DEFAULT_LABELS.get(c, f'Col {c}')})",
+    render_top_toolbar(uploaded.name, fe, len(data[0]) if data else 0, cols, start, end)
+
+    toolbar_cols = st.columns([1, 1, 1, 1, 1, 2.8])
+    if toolbar_cols[0].button("⇥ Curseurs extrémités", use_container_width=True):
+        queue_cursor(0.0, end_auto)
+        st.rerun()
+    if toolbar_cols[1].button("← Reculer plage", use_container_width=True):
+        dur = max(end - start, min(1.0, end_auto))
+        queue_cursor(max(0.0, start - dur), max(dur, end - dur))
+        st.rerun()
+    if toolbar_cols[2].button("Avancer plage →", use_container_width=True):
+        dur = max(end - start, min(1.0, end_auto))
+        queue_cursor(min(max(0.0, end_auto - dur), start + dur), min(end_auto, end + dur))
+        st.rerun()
+    if toolbar_cols[3].button("➕ Zone courante", use_container_width=True):
+        zdf = normalise_zones_df(st.session_state.get("zones_df", pd.DataFrame()), end_auto)
+        zdf.loc[len(zdf)] = [len(zdf) + 1, start, end, end - start]
+        st.session_state.zones_df = normalise_zones_df(zdf, end_auto)
+        st.rerun()
+    if toolbar_cols[4].button("🧹 Vider zones", use_container_width=True):
+        st.session_state.zones_df = pd.DataFrame(columns=["Zone", "Start (s)", "End (s)", "Durée (s)"])
+        st.session_state.multi_rows = pd.DataFrame()
+        st.session_state.multi_raw_rows = []
+        st.rerun()
+
+    with st.expander("Saisie directe des curseurs", expanded=False):
+        with st.form("timecode_form", clear_on_submit=False):
+            tca, tcb, tcc = st.columns([1, 1, 1])
+            tca.text_input("Start", key="tc_start", help="Secondes, MM:SS.fff ou HH:MM:SS.fff")
+            tcb.text_input("End", key="tc_end", help="Secondes, MM:SS.fff ou HH:MM:SS.fff")
+            submitted_tc = tcc.form_submit_button("⏎ Appliquer", use_container_width=True)
+            if submitted_tc:
+                try:
+                    queue_cursor(parse_timecode(st.session_state.tc_start), parse_timecode(st.session_state.tc_end))
+                    st.rerun()
+                except Exception:
+                    st.error("Timecode invalide. Exemples acceptés : 12.345, 1:05.250, 0:01:05.250")
+
+    st.markdown(
+        f"""
+        <div class="cursor-card">
+          <div class="cursor-readout">
+            <div class="cursor-kpi"><small>Start</small><b>{start:.4f} s</b></div>
+            <div class="cursor-kpi"><small>End</small><b>{end:.4f} s</b></div>
+            <div class="cursor-kpi"><small>Durée</small><b>{max(0.0, end-start):.4f} s</b></div>
+            <div class="cursor-kpi"><small>Étendue fichier</small><b>{end_auto:.4f} s</b></div>
+          </div>
+          <span class="hav-note">Curseurs web : glissez les deux poignées de la barre ci-dessous, ou dessinez un rectangle horizontal dans le graphe puis appliquez la sélection graphique.</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    st.session_state.start = float(np.clip(float(st.session_state.start), 0.0, float(end_auto)))
-    st.session_state.end = float(np.clip(float(st.session_state.end), 0.0, float(end_auto)))
-    start = st.number_input("Start (s)", min_value=0.0, max_value=float(end_auto), step=0.01, format="%.4f", key="start")
-    end = st.number_input("End (s)", min_value=0.0, max_value=float(end_auto), step=0.01, format="%.4f", key="end")
-    if end < start:
-        start, end = end, start
+    cur_cols = st.columns([1, 1, 3])
+    fixed_duration = cur_cols[0].checkbox("Durée fixe", key="fixed_duration")
+    duration_default = max(0.001, min(max(end - start, 0.001), max(end_auto, 0.001)))
+    if "fixed_duration_value" not in st.session_state or st.session_state.fixed_duration_value <= 0:
+        st.session_state.fixed_duration_value = duration_default
+    st.session_state.fixed_duration_value = float(np.clip(
+        float(st.session_state.fixed_duration_value), 0.001, max(0.001, float(end_auto))
+    ))
+    fixed_duration_value = cur_cols[1].number_input(
+        "Durée fixe (s)", min_value=0.001, max_value=max(0.001, float(end_auto)), step=0.001,
+        format="%.4f", key="fixed_duration_value", disabled=not fixed_duration,
+    )
+    slider_step = max(0.0001, min(0.1, float(end_auto) / 10_000.0 if end_auto > 0 else 0.001))
+    if fixed_duration:
+        dur = min(float(fixed_duration_value), float(end_auto))
+        max_start = max(0.0, float(end_auto) - dur)
+        if float(st.session_state.get("cursor_start_fixed", start)) > max_start:
+            st.session_state.cursor_start_fixed = max_start
+        s_fixed = st.slider(
+            "Start de la plage fixe",
+            min_value=0.0, max_value=float(max_start), value=float(st.session_state.get("cursor_start_fixed", start)),
+            step=slider_step, key="cursor_start_fixed",
+        )
+        start, end = clamp_range_pair(float(s_fixed), float(s_fixed) + dur, end_auto)
+    else:
+        current_range = st.session_state.get("cursor_range", (start, end))
+        try:
+            rs, re = float(current_range[0]), float(current_range[1])
+        except Exception:
+            rs, re = start, end
+        rs, re = clamp_range_pair(rs, re, end_auto)
+        if (rs, re) != tuple(st.session_state.get("cursor_range", (None, None))):
+            st.session_state.cursor_range = (rs, re)
+        start, end = st.slider(
+            "Plage Start / End",
+            min_value=0.0, max_value=float(end_auto), value=(float(rs), float(re)),
+            step=slider_step, key="cursor_range",
+        )
+        start, end = clamp_range_pair(start, end, end_auto)
+
+    if abs(start - st.session_state.cursor_start) > 1e-9 or abs(end - st.session_state.cursor_end) > 1e-9:
+        st.session_state.cursor_start = float(start)
+        st.session_state.cursor_end = float(end)
         st.session_state.start = float(start)
         st.session_state.end = float(end)
-    if st.button("⇥ Plage complète"):
-        st.session_state.start = 0.0
-        st.session_state.end = float(end_auto)
-        st.rerun()
+        st.session_state._force_cursor_widget_sync = True
+
+    with st.expander("Colonnes et affichage timeline", expanded=True):
+        tl_ctrl = st.columns([1.1, 1.0, 1.0, 1.0, 1.3])
+        mode = tl_ctrl[0].selectbox("Affichage", ["Courbes 1/2/3", "Courbes 4/5/6", "Courbes 1→6", "Colonne seule"], index=0, key="timeline_mode")
+        synthetic = tl_ctrl[1].checkbox("Vue synthétique", value=True, key="synthetic_view")
+        show_range_slider = tl_ctrl[2].checkbox("Mini-range Plotly", value=False, help="Ajoute le range-slider Plotly sous l'axe X. Peut ralentir les très gros fichiers.")
+        graph_select_auto = tl_ctrl[3].checkbox("Sélection graphique auto", value=False, help="Applique automatiquement la plage sélectionnée au rectangle dans le graphe.")
+        if mode == "Colonne seule":
+            one_col = tl_ctrl[4].selectbox("Colonne", data_cols, format_func=lambda c: f"{c} ({st.session_state.get('col_labels', {}).get(c, DEFAULT_LABELS.get(c, f'Col {c}'))})")
+            candidates = [one_col]
+        else:
+            candidates = candidate_cols_for_mode(mode, data_cols)
+
+        if "col_labels" not in st.session_state:
+            st.session_state.col_labels = dict(DEFAULT_LABELS)
+        labels_current = {c: st.session_state.col_labels.get(c, DEFAULT_LABELS.get(c, f"Col {c}")) for c in data_cols}
+        selected_plot_cols = st.multiselect(
+            "Courbes affichées",
+            options=candidates,
+            default=candidates,
+            format_func=lambda c: f"{c} ({labels_current.get(c, f'Col {c}')})",
+        )
+        with st.expander("Renommer les colonnes", expanded=False):
+            ren_cols = st.columns(min(3, max(1, len(data_cols))))
+            for i, c in enumerate(data_cols):
+                with ren_cols[i % len(ren_cols)]:
+                    st.session_state.col_labels[c] = st.text_input(
+                        f"Colonne {c}", value=labels_current.get(c, DEFAULT_LABELS.get(c, f"Col {c}")), key=f"label_col_{c}"
+                    )
+            labels_current = {c: st.session_state.col_labels.get(c, DEFAULT_LABELS.get(c, f"Col {c}")) for c in data_cols}
 
     first_sig = np.asarray(get_by_col(data, cols, data_cols[0]), dtype=float)
     sig_ref = np.asarray(cut_signal(first_sig, fe, 0.0, end_auto), dtype=float)
@@ -1188,160 +1672,223 @@ def main() -> None:
         t_cut = np.arange(len(sig_ref), dtype=float) / fe
 
     sigs_plot: dict[int, np.ndarray] = {}
-    labels: dict[int, str] = {}
     for c in selected_plot_cols:
         sigs_plot[c] = np.asarray(cut_signal(get_by_col(data, cols, c), fe, 0.0, end_auto), dtype=float)
-        labels[c] = DEFAULT_LABELS.get(c, f"Col {c}")
 
-    fig = make_timeline_figure(t_cut, sigs_plot, labels, start, end, theme_name, synthetic=synthetic)
-    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+    zones_for_plot = zones_from_df(st.session_state.get("zones_df", pd.DataFrame()), end_auto)
+    fig = make_timeline_figure(
+        t_cut, sigs_plot, labels_current, start, end, theme_name,
+        synthetic=synthetic, zones=zones_for_plot, show_range_slider=show_range_slider,
+    )
+    plot_event = st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key="timeline_chart",
+        on_select="rerun",
+        selection_mode=["box"],
+        config={"displaylogo": False, "scrollZoom": True, "modeBarButtonsToAdd": ["select2d", "pan2d", "zoom2d", "resetScale2d"]},
+    )
+    selected_range = extract_plotly_selection_range(plot_event)
+    if selected_range is not None:
+        gs, ge = clamp_range_pair(selected_range[0], selected_range[1], end_auto)
+        st.session_state.last_graph_selection = (gs, ge)
+        if graph_select_auto:
+            queue_cursor(gs, ge)
+            st.rerun()
+    if st.session_state.get("last_graph_selection"):
+        gs, ge = st.session_state.last_graph_selection
+        gc1, gc2, gc3 = st.columns([1.2, 1.2, 5])
+        gc1.info(f"Sélection graphe : {gs:.4f} → {ge:.4f} s")
+        if gc2.button("Utiliser comme curseurs", use_container_width=True):
+            queue_cursor(gs, ge)
+            st.rerun()
 
-    with st.expander("Découpage automatique", expanded=False):
+    tabs = st.tabs(["Calcul simple", "Multi-découpe", "Découpage auto", "Tracés avancés"])
+
+    with tabs[0]:
+        st.subheader("Calcul simple")
+        calc_default = [c for c in [1, 2, 3, 4, 5, 6] if c in data_cols][:6] or data_cols[:3]
+        ccalc1, ccalc2, ccalc3 = st.columns([2.6, 1.1, 1.1])
+        calc_cols = ccalc1.multiselect(
+            "Colonnes de calcul",
+            options=data_cols,
+            default=calc_default,
+            format_func=lambda c: f"{c} ({labels_current.get(c, f'Col {c}')})",
+            help="1 colonne = mono-axe ; 3 colonnes = tri-axe ; 6 colonnes + dual = deux tri-axes.",
+        )
+        dual_mode = ccalc2.checkbox("Dual 1/2", value=True, help="Si 6 colonnes sont sélectionnées : [1,2,3] et [4,5,6].")
+        auto_calc = ccalc3.checkbox("Calcul auto", value=True, help="Recalcule les résultats à chaque modification des curseurs ou de la sélection.")
+
+        manual_cols = st.columns([1, 1, 1, 4])
+        manual_clicked = manual_cols[0].button("⚡ Calculer", type="primary", use_container_width=True)
+        manual_cols[1].caption("aHV = Wh")
+        manual_cols[2].caption("pF = Flat_h")
+
+        should_compute = bool(auto_calc or manual_clicked)
+        if should_compute:
+            try:
+                rows = compute_rows_for_selection(
+                    calc_cols, data, cols, fe, start, end,
+                    resample_enabled, resample_ahv_only, float(fs_new),
+                    do_ahv, do_wp, do_pf, dual_mode,
+                )
+                st.session_state.result_rows = rows
+            except Exception as ex:
+                if manual_clicked:
+                    st.error(f"Calcul impossible : {ex}")
+                elif not st.session_state.get("result_rows"):
+                    st.warning(str(ex))
+
+        result_rows = st.session_state.get("result_rows", [])
+        render_results(result_rows, theme_name)
+        if result_rows:
+            exp_cols = st.columns([1, 1, 1, 1.2, 3])
+            selected_export_types = []
+            if exp_cols[0].checkbox("Exporter aHV Wh", value=True):
+                selected_export_types.append("aHV")
+            if exp_cols[1].checkbox("Exporter aHV(wp) Wp", value=True):
+                selected_export_types.append("aHVwp")
+            if exp_cols[2].checkbox("Exporter pF Flat_h", value=True):
+                selected_export_types.append("pF")
+            tsv = build_tsv(result_rows, uploaded.name, selected_export_types, include_header)
+            exp_cols[3].download_button("⬇ TSV", data=tsv.encode("utf-8"), file_name="resultats_hav.tsv", mime="text/tab-separated-values", use_container_width=True)
+            with st.expander("Table détail / copier-coller", expanded=False):
+                st.dataframe(rows_to_detail_df(result_rows, theme_name), use_container_width=True, hide_index=True)
+                st.text_area("TSV prêt pour Excel FR", tsv, height=150)
+
+    with tabs[1]:
+        st.subheader("Multi-découpe")
+        zdf = normalise_zones_df(st.session_state.get("zones_df", pd.DataFrame()), end_auto)
+        zinfo1, zinfo2, zinfo3 = st.columns([1, 1, 3])
+        if zinfo1.button("➕ Ajouter plage courante", use_container_width=True, key="add_zone_tab"):
+            zdf.loc[len(zdf)] = [len(zdf) + 1, start, end, end - start]
+            st.session_state.zones_df = normalise_zones_df(zdf, end_auto)
+            st.rerun()
+        if zinfo2.button("Vider", use_container_width=True, key="clear_zone_tab"):
+            st.session_state.zones_df = pd.DataFrame(columns=["Zone", "Start (s)", "End (s)", "Durée (s)"])
+            st.session_state.multi_rows = pd.DataFrame()
+            st.session_state.multi_raw_rows = []
+            st.rerun()
+        zinfo3.caption("Les zones sont dessinées sur la timeline au-dessus. Modifie Start/End, puis calcule tout.")
+
+        zones_df_edit = st.data_editor(
+            zdf,
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            disabled=["Zone", "Durée (s)"],
+            column_config={
+                "Zone": st.column_config.NumberColumn("Zone", step=1),
+                "Start (s)": st.column_config.NumberColumn("Start (s)", format="%.4f"),
+                "End (s)": st.column_config.NumberColumn("End (s)", format="%.4f"),
+                "Durée (s)": st.column_config.NumberColumn("Durée (s)", format="%.4f"),
+            },
+            key="zones_editor_v2",
+        )
+        st.session_state.zones_df = normalise_zones_df(zones_df_edit, end_auto)
+
+        mc1, mc2, mc3 = st.columns([1, 1, 2])
+        axes_choice = mc1.selectbox("Axes", ["[1,2,3]", "[4,5,6]", "[1,2,3] + [4,5,6]"], index=0)
+        mc_resample = mc2.checkbox("Rééchantillonnage multi", value=resample_enabled)
+        if mc3.button("⚡ Calculer toutes les zones", use_container_width=True):
+            try:
+                if axes_choice == "[1,2,3]":
+                    axes_sets = [[1, 2, 3]]
+                elif axes_choice == "[4,5,6]":
+                    axes_sets = [[4, 5, 6]]
+                else:
+                    axes_sets = [[1, 2, 3], [4, 5, 6]]
+                axes_sets = [[c for c in ax if c in data_cols] for ax in axes_sets]
+                axes_sets = [ax for ax in axes_sets if len(ax) == 3]
+                if not axes_sets:
+                    raise ValueError("Les colonnes nécessaires aux axes choisis ne sont pas présentes.")
+                all_out_rows: list[dict[str, Any]] = []
+                clean_zdf = normalise_zones_df(st.session_state.zones_df, end_auto)
+                for i, z in clean_zdf.reset_index(drop=True).iterrows():
+                    zs = float(z.get("Start (s)", 0.0))
+                    ze = float(z.get("End (s)", 0.0))
+                    if ze <= zs:
+                        continue
+                    for ax in axes_sets:
+                        rows = run_group(ax, data, cols, fe, zs, ze, mc_resample, resample_ahv_only, float(fs_new), do_ahv, do_wp, do_pf)
+                        for r in rows:
+                            r = dict(r)
+                            r["zone"] = int(z.get("Zone", i + 1)) if not pd.isna(z.get("Zone", np.nan)) else i + 1
+                            all_out_rows.append(r)
+                if not all_out_rows:
+                    raise ValueError("Aucune zone valide à calculer.")
+                st.session_state.multi_rows = rows_to_detail_df(all_out_rows, theme_name)
+                st.session_state.multi_raw_rows = all_out_rows
+                st.success(f"Calcul terminé : {len(clean_zdf)} zone(s).")
+            except Exception as ex:
+                st.error(f"Multi-découpe impossible : {ex}")
+
+        multi_df = st.session_state.get("multi_rows", pd.DataFrame())
+        if isinstance(multi_df, pd.DataFrame) and not multi_df.empty:
+            st.dataframe(multi_df, use_container_width=True, hide_index=True)
+            raw_rows = st.session_state.get("multi_raw_rows", [])
+            tsv_multi = build_tsv(raw_rows, uploaded.name, ["aHV", "aHVwp", "pF"], include_header)
+            st.download_button("⬇ Télécharger multi-découpe TSV", data=tsv_multi.encode("utf-8"), file_name="multi_decoupe_hav.tsv", mime="text/tab-separated-values", use_container_width=True)
+            with st.expander("TSV multi-découpe", expanded=False):
+                st.text_area("Copier-coller Excel FR", tsv_multi, height=180)
+
+    with tabs[2]:
+        st.subheader("Découpage automatique")
         if selected_plot_cols:
-            ref_col = selected_plot_cols[0]
+            ref_col = st.selectbox("Colonne utilisée pour détecter", selected_plot_cols, format_func=lambda c: f"{c} ({labels_current.get(c, c)})")
             sig_auto = np.asarray(sigs_plot.get(ref_col), dtype=float)
             abs_sig = np.abs(sig_auto)
             default_thr = float(np.mean(abs_sig) + 2.0 * np.std(abs_sig)) if abs_sig.size else 0.0
-            auto_col1, auto_col2, auto_col3 = st.columns(3)
+            auto_col1, auto_col2, auto_col3, auto_col4 = st.columns(4)
             threshold = auto_col1.number_input("Seuil", value=default_thr, format="%.6f")
             min_dur = auto_col2.number_input("Durée min. zone (s)", value=0.1, min_value=0.001, step=0.05, format="%.3f")
             gap = auto_col3.number_input("Fusion si écart < (s)", value=0.5, min_value=0.0, step=0.05, format="%.3f")
-            if st.button("Détecter et ajouter aux zones"):
+            detect_clicked = auto_col4.button("⚡ Détecter", use_container_width=True)
+            if detect_clicked:
                 zones = detect_vibration_zones(sig_auto, t_cut[:len(sig_auto)], threshold, min_dur, gap)
-                if zones:
-                    existing = st.session_state.zones_df.copy()
-                    add = pd.DataFrame({"Zone": list(range(len(existing) + 1, len(existing) + len(zones) + 1)), "Start (s)": [z[0] for z in zones], "End (s)": [z[1] for z in zones]})
-                    st.session_state.zones_df = pd.concat([existing, add], ignore_index=True)
-                    st.success(f"{len(zones)} zone(s) ajoutée(s).")
-                else:
+                st.session_state.detected_zones = zones
+                if not zones:
                     st.warning("Aucune zone détectée avec ce seuil.")
+            zones_detected = st.session_state.get("detected_zones", [])
+            if zones_detected:
+                det_df = pd.DataFrame({"Zone": range(1, len(zones_detected) + 1), "Start (s)": [z[0] for z in zones_detected], "End (s)": [z[1] for z in zones_detected], "Durée (s)": [z[1] - z[0] for z in zones_detected]})
+                st.dataframe(det_df, use_container_width=True, hide_index=True)
+                ac1, ac2, ac3, ac4 = st.columns(4)
+                if ac1.button("Utiliser 1ère zone", use_container_width=True):
+                    queue_cursor(*zones_detected[0]); st.rerun()
+                if ac2.button("Utiliser dernière zone", use_container_width=True):
+                    queue_cursor(*zones_detected[-1]); st.rerun()
+                if ac3.button("Toute l'étendue", use_container_width=True):
+                    queue_cursor(zones_detected[0][0], zones_detected[-1][1]); st.rerun()
+                if ac4.button("Ajouter au multi-découpe", use_container_width=True):
+                    existing = normalise_zones_df(st.session_state.get("zones_df", pd.DataFrame()), end_auto)
+                    add = pd.DataFrame({"Zone": [], "Start (s)": [], "End (s)": [], "Durée (s)": []})
+                    for z_s, z_e in zones_detected:
+                        add.loc[len(add)] = [0, float(z_s), float(z_e), float(z_e - z_s)]
+                    st.session_state.zones_df = normalise_zones_df(pd.concat([existing, add], ignore_index=True), end_auto)
+                    st.success(f"{len(zones_detected)} zone(s) ajoutée(s). Elles apparaîtront sur la timeline au prochain rerun.")
         else:
             st.info("Sélectionne au moins une courbe sur la timeline.")
 
-    st.subheader("Calcul simple")
-    calc_cols = st.multiselect(
-        "Colonnes de calcul",
-        options=data_cols,
-        default=[c for c in [1, 2, 3, 4, 5, 6] if c in data_cols][:6] or data_cols[:3],
-        format_func=lambda c: f"{c} ({DEFAULT_LABELS.get(c, f'Col {c}')})",
-        help="3 colonnes = un tri-axe ; 6 colonnes + mode dual = deux tri-axes.",
-    )
-    dual_mode = st.checkbox("Dual : calculer [1,2,3] ET [4,5,6] si 6 colonnes sont sélectionnées", value=True)
-
-    button_cols = st.columns([1, 1, 1, 4])
-    if button_cols[0].button("⚡ Calculer", type="primary", use_container_width=True):
-        try:
-            rows: list[dict[str, Any]] = []
-            if len(calc_cols) == 1:
-                if do_ahv:
-                    rows.append(compute_1_axis(calc_cols[0], "aHV", data, cols, fe, start, end, resample_enabled, resample_ahv_only, float(fs_new)))
-                if do_wp:
-                    rows.append(compute_1_axis(calc_cols[0], "aHVwp", data, cols, fe, start, end, resample_enabled, resample_ahv_only, float(fs_new)))
-                if do_pf:
-                    rows.append(compute_1_axis(calc_cols[0], "pF", data, cols, fe, start, end, resample_enabled, resample_ahv_only, float(fs_new)))
-            elif dual_mode and len(calc_cols) >= 6:
-                rows += run_group(calc_cols[:3], data, cols, fe, start, end, resample_enabled, resample_ahv_only, float(fs_new), do_ahv, do_wp, do_pf)
-                rows += run_group(calc_cols[3:6], data, cols, fe, start, end, resample_enabled, resample_ahv_only, float(fs_new), do_ahv, do_wp, do_pf)
-            elif len(calc_cols) >= 3:
-                rows += run_group(calc_cols[:3], data, cols, fe, start, end, resample_enabled, resample_ahv_only, float(fs_new), do_ahv, do_wp, do_pf)
-            else:
-                st.warning("Sélectionne 1 colonne pour le calcul mono-axe ou au moins 3 colonnes pour un tri-axe.")
-            st.session_state.result_rows = rows
-        except Exception as ex:
-            st.error(f"Calcul impossible : {ex}")
-
-    result_rows = st.session_state.get("result_rows", [])
-    render_results(result_rows, theme_name)
-
-    if result_rows:
-        selected_export_types = []
-        exp_cols = st.columns(6)
-        if exp_cols[0].checkbox("Exporter aHV Wh", value=True):
-            selected_export_types.append("aHV")
-        if exp_cols[1].checkbox("Exporter aHV(wp) Wp", value=True):
-            selected_export_types.append("aHVwp")
-        if exp_cols[2].checkbox("Exporter pF Flat_h", value=True):
-            selected_export_types.append("pF")
-        tsv = build_tsv(result_rows, uploaded.name, selected_export_types, include_header)
-        exp_cols[3].download_button("⬇ Télécharger TSV", data=tsv.encode("utf-8"), file_name="resultats_hav.tsv", mime="text/tab-separated-values", use_container_width=True)
-        with st.expander("Table détail / copier-coller"):
-            st.dataframe(rows_to_detail_df(result_rows, theme_name), use_container_width=True, hide_index=True)
-            st.text_area("TSV prêt pour Excel FR", tsv, height=150)
-
-    st.subheader("Multi-découpe")
-    zc1, zc2, zc3 = st.columns([1, 1, 4])
-    if zc1.button("➕ Ajouter plage courante", use_container_width=True):
-        df = st.session_state.zones_df.copy()
-        df.loc[len(df)] = [len(df) + 1, float(start), float(end)]
-        st.session_state.zones_df = df
-        st.rerun()
-    if zc2.button("Vider", use_container_width=True):
-        st.session_state.zones_df = pd.DataFrame(columns=["Zone", "Start (s)", "End (s)"])
-        st.session_state.multi_rows = pd.DataFrame()
-        st.rerun()
-
-    zones_df = st.data_editor(
-        st.session_state.zones_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Zone": st.column_config.NumberColumn("Zone", step=1),
-            "Start (s)": st.column_config.NumberColumn("Start (s)", format="%.4f"),
-            "End (s)": st.column_config.NumberColumn("End (s)", format="%.4f"),
-        },
-        key="zones_editor",
-    )
-    st.session_state.zones_df = zones_df
-
-    axes_choice = st.selectbox("Axes multi-découpe", ["[1,2,3]", "[4,5,6]", "[1,2,3] + [4,5,6]"], index=0)
-    if st.button("⚡ Calculer toutes les zones", use_container_width=True):
-        try:
-            axes_sets: list[list[int]]
-            if axes_choice == "[1,2,3]":
-                axes_sets = [[1, 2, 3]]
-            elif axes_choice == "[4,5,6]":
-                axes_sets = [[4, 5, 6]]
-            else:
-                axes_sets = [[1, 2, 3], [4, 5, 6]]
-            axes_sets = [[c for c in ax if c in data_cols] for ax in axes_sets]
-            axes_sets = [ax for ax in axes_sets if len(ax) == 3]
-            if not axes_sets:
-                raise ValueError("Les colonnes nécessaires aux axes choisis ne sont pas présentes.")
-            all_out_rows: list[dict[str, Any]] = []
-            for i, z in zones_df.reset_index(drop=True).iterrows():
-                zs = float(z.get("Start (s)", 0.0))
-                ze = float(z.get("End (s)", 0.0))
-                if ze <= zs:
-                    continue
-                for ax in axes_sets:
-                    rows = run_group(ax, data, cols, fe, zs, ze, resample_enabled, resample_ahv_only, float(fs_new), do_ahv, do_wp, do_pf)
-                    for r in rows:
-                        r = dict(r)
-                        r["zone"] = int(z.get("Zone", i + 1)) if not pd.isna(z.get("Zone", np.nan)) else i + 1
-                        all_out_rows.append(r)
-            if not all_out_rows:
-                raise ValueError("Aucune zone valide à calculer.")
-            st.session_state.multi_rows = rows_to_detail_df(all_out_rows, theme_name)
-            st.session_state.multi_raw_rows = all_out_rows
-        except Exception as ex:
-            st.error(f"Multi-découpe impossible : {ex}")
-
-    multi_df = st.session_state.get("multi_rows", pd.DataFrame())
-    if isinstance(multi_df, pd.DataFrame) and not multi_df.empty:
-        st.dataframe(multi_df, use_container_width=True, hide_index=True)
-        raw_rows = st.session_state.get("multi_raw_rows", [])
-        tsv_multi = build_tsv(raw_rows, uploaded.name, ["aHV", "aHVwp", "pF"], include_header)
-        st.download_button("⬇ Télécharger multi-découpe TSV", data=tsv_multi.encode("utf-8"), file_name="multi_decoupe_hav.tsv", mime="text/tab-separated-values", use_container_width=True)
-
-    with st.expander("Tracés avancés : brut / filtre / spectre", expanded=False):
-        plot_cols = st.multiselect("Colonnes à tracer", data_cols, default=data_cols[:3], format_func=lambda c: f"{c} ({DEFAULT_LABELS.get(c, f'Col {c}')})", key="advanced_cols")
+    with tabs[3]:
+        st.subheader("Tracés avancés : brut / filtre / spectre")
+        plot_cols = st.multiselect("Colonnes à tracer", data_cols, default=data_cols[:3], format_func=lambda c: f"{c} ({labels_current.get(c, f'Col {c}')})", key="advanced_cols")
         f1 = st.selectbox("Filtre 1", FILTERS, index=FILTERS.index("wh"))
         f2 = st.selectbox("Filtre 2", FILTERS, index=FILTERS.index("flat"))
-        if st.button("Tracer comparaison filtres") and plot_cols:
+        adv_cols = st.columns([1, 1, 4])
+        if adv_cols[0].button("⏱ Temporel brut", use_container_width=True) and plot_cols:
+            raw_signals = [np.asarray(cut_signal(get_by_col(data, cols, c), fe, start, end), dtype=float) for c in plot_cols]
+            t_adv = np.asarray(cut_signal(time_sec, fe, start, end), dtype=float) if time_sec is not None else np.arange(len(raw_signals[0])) / fe + start
+            sigs_tmp = {c: raw_signals[i] for i, c in enumerate(plot_cols)}
+            st.plotly_chart(make_timeline_figure(t_adv, sigs_tmp, labels_current, start, end, theme_name, synthetic=False), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+        if adv_cols[1].button("📊 Spectre brut", use_container_width=True) and plot_cols:
+            raw_signals = [np.asarray(cut_signal(get_by_col(data, cols, c), fe, start, end), dtype=float) for c in plot_cols]
+            labels_adv = [labels_current.get(c, f"Col {c}") for c in plot_cols]
+            st.plotly_chart(make_spectrum_figure(raw_signals, fe, labels_adv, theme_name), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+        if st.button("🎚 Comparer brut / filtre 1 / filtre 2", use_container_width=True) and plot_cols:
             try:
                 raw_signals = [np.asarray(cut_signal(get_by_col(data, cols, c), fe, start, end), dtype=float) for c in plot_cols]
-                t_adv = np.asarray(cut_signal(time_sec, fe, start, end), dtype=float) if time_sec is not None else np.arange(len(raw_signals[0])) / fe
+                t_adv = np.asarray(cut_signal(time_sec, fe, start, end), dtype=float) if time_sec is not None else np.arange(len(raw_signals[0])) / fe + start
                 fig_cmp = go.Figure()
                 sigs_for_spectrum = []
                 labels_for_spectrum = []
@@ -1350,18 +1897,18 @@ def main() -> None:
                     filt1, fe1 = cut_filter(data, cols, c, fe, start, end, f1, "plot", resample_enabled, resample_ahv_only, float(fs_new))
                     filt2, fe2 = cut_filter(data, cols, c, fe, start, end, f2, "plot", resample_enabled, resample_ahv_only, float(fs_new))
                     xd, yd = downsample_xy(t_adv[:len(raw)], raw)
-                    fig_cmp.add_trace(go.Scattergl(x=xd, y=yd, mode="lines", name=f"{DEFAULT_LABELS.get(c, c)} brut", line=dict(width=1)))
+                    fig_cmp.add_trace(go.Scattergl(x=xd, y=yd, mode="lines", name=f"{labels_current.get(c, c)} brut", line=dict(width=1)))
                     t_f = np.arange(len(filt1)) / fe1 + start
                     xd, yd = downsample_xy(t_f, filt1)
-                    fig_cmp.add_trace(go.Scattergl(x=xd, y=yd, mode="lines", name=f"{DEFAULT_LABELS.get(c, c)} {f1}", line=dict(width=1)))
+                    fig_cmp.add_trace(go.Scattergl(x=xd, y=yd, mode="lines", name=f"{labels_current.get(c, c)} {f1}", line=dict(width=1)))
                     t_f2 = np.arange(len(filt2)) / fe2 + start
                     xd, yd = downsample_xy(t_f2, filt2)
-                    fig_cmp.add_trace(go.Scattergl(x=xd, y=yd, mode="lines", name=f"{DEFAULT_LABELS.get(c, c)} {f2}", line=dict(width=1)))
+                    fig_cmp.add_trace(go.Scattergl(x=xd, y=yd, mode="lines", name=f"{labels_current.get(c, c)} {f2}", line=dict(width=1)))
                     sigs_for_spectrum.extend([raw, filt1, filt2])
-                    labels_for_spectrum.extend([f"{DEFAULT_LABELS.get(c, c)} brut", f"{DEFAULT_LABELS.get(c, c)} {f1}", f"{DEFAULT_LABELS.get(c, c)} {f2}"])
-                fig_cmp.update_layout(template=THEMES[theme_name]["plot_template"], height=450, margin=dict(l=30, r=20, t=30, b=35))
-                fig_cmp.update_xaxes(title="Temps (s)")
-                fig_cmp.update_yaxes(title="m/s²")
+                    labels_for_spectrum.extend([f"{labels_current.get(c, c)} brut", f"{labels_current.get(c, c)} {f1}", f"{labels_current.get(c, c)} {f2}"])
+                fig_cmp.update_layout(template=THEMES[theme_name]["plot_template"], height=450, margin=dict(l=30, r=20, t=30, b=35), hovermode="x unified")
+                fig_cmp.update_xaxes(title="Temps (s)", showgrid=True, gridcolor=THEMES[theme_name]["grid"])
+                fig_cmp.update_yaxes(title="m/s²", showgrid=True, gridcolor=THEMES[theme_name]["grid"])
                 st.plotly_chart(fig_cmp, use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
                 st.plotly_chart(make_spectrum_figure(sigs_for_spectrum, fe, labels_for_spectrum, theme_name), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
             except Exception as ex:
